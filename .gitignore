@@ -1,0 +1,16 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+_docx_render/
+
+# Generated artifacts are intentionally kept when they are part of a sample run.
+# Add local-only files here instead of committing secrets.
+
