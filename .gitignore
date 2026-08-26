@@ -11,14 +11,17 @@ build/
 *.egg-info/
 _docx_render/
 
-# Generated artifacts are intentionally kept when they are part of a sample run.
-# Add local-only files here instead of committing secrets.
-
 secrets/
 service-account*.json
 google-service-account*.json
 
-# Generated local artifacts
+# Локальні результати та службові файли
 output.json
 report.md
+review_queue.json
+metrics.json
+.cache/
 docx_qa/
+eval/predictions.json
+eval/metrics.json
+.pytest_tmp/

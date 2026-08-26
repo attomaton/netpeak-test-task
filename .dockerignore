@@ -3,9 +3,12 @@
 .venv
 __pycache__
 *.pyc
+.pytest_cache
 output.json
 report.md
-
+review_queue.json
+metrics.json
+.cache
 secrets
 service-account*.json
 google-service-account*.json

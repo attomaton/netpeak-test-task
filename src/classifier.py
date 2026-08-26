@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from typing import Any, Protocol
 
+from .cache import ClassificationCache
 from .models import (
     InputRequest,
     ProcessingError,
     RequestResult,
     parse_llm_output,
 )
+from .monitoring import MetricsCollector
+from .rate_limit import QuotaAwareRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +44,9 @@ class RequestClassifier:
         backoff_seconds: float = 1.0,
         sleep: Callable[[float], None] = time.sleep,
         api_key: str | None = None,
+        cache: ClassificationCache | None = None,
+        rate_limiter: QuotaAwareRateLimiter | None = None,
+        metrics: MetricsCollector | None = None,
     ) -> None:
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
@@ -50,24 +57,57 @@ class RequestClassifier:
         self.backoff_seconds = backoff_seconds
         self.sleep = sleep
         self.api_key = api_key
+        self.cache = cache
+        self.rate_limiter = rate_limiter
+        self.metrics = metrics
 
     def classify_request(self, request: InputRequest) -> RequestResult:
         """Return a success or explicit error result after bounded retries."""
 
+        started = time.perf_counter()
+        if self.cache is not None:
+            cached = self.cache.get(request.raw_text)
+            if cached is not None:
+                if self.metrics is not None:
+                    self.metrics.record_cache_hit()
+                result = RequestResult(
+                    id=request.id,
+                    channel=request.channel,
+                    timestamp=request.timestamp,
+                    classification=cached,
+                )
+                self._record_result(result, started)
+                logger.info("Cache hit for request %s", request.id)
+                return result
+
         for attempt in range(1, self.max_attempts + 1):
             try:
+                if self.rate_limiter is not None:
+                    self.rate_limiter.acquire()
+                if self.metrics is not None:
+                    self.metrics.record_attempt(retry=attempt > 1)
                 raw_output = self.llm_client.classify(request.raw_text)
                 classification = parse_llm_output(raw_output)
+                if self.cache is not None:
+                    try:
+                        self.cache.set(request.raw_text, classification)
+                    except OSError as exc:
+                        logger.warning("Could not write classification cache: %s", exc)
                 logger.info("Classified request %s on attempt %s", request.id, attempt)
-                return RequestResult(
+                result = RequestResult(
                     id=request.id,
                     channel=request.channel,
                     timestamp=request.timestamp,
                     classification=classification,
                 )
+                self._record_result(result, started)
+                return result
             except Exception as exc:  # API, timeout, JSON and Pydantic errors are all retryable here.
                 error_type = type(exc).__name__
                 message = sanitize_error_message(str(exc), self.api_key)
+                quota_delay = _extract_retry_delay(message)
+                if quota_delay and self.rate_limiter is not None:
+                    self.rate_limiter.cooldown(quota_delay)
                 if attempt == self.max_attempts:
                     logger.error(
                         "Request %s failed after %s attempts: %s: %s",
@@ -76,7 +116,7 @@ class RequestClassifier:
                         error_type,
                         message,
                     )
-                    return RequestResult(
+                    result = RequestResult(
                         id=request.id,
                         channel=request.channel,
                         timestamp=request.timestamp,
@@ -86,8 +126,12 @@ class RequestClassifier:
                             attempts=attempt,
                         ),
                     )
+                    self._record_result(result, started)
+                    return result
 
                 delay = self.backoff_seconds * (2 ** (attempt - 1))
+                if quota_delay is not None:
+                    delay = max(delay, quota_delay)
                 logger.warning(
                     "Retrying request %s after attempt %s/%s in %.2fs: %s: %s",
                     request.id,
@@ -100,6 +144,10 @@ class RequestClassifier:
                 self.sleep(delay)
 
         raise AssertionError("unreachable")
+
+    def _record_result(self, result: RequestResult, started: float) -> None:
+        if self.metrics is not None:
+            self.metrics.record_result(result, time.perf_counter() - started)
 
 
 def classify_requests(
@@ -120,3 +168,11 @@ def _is_json_error(exc: Exception) -> bool:
 
     return isinstance(exc, (json.JSONDecodeError, ValueError, TypeError))
 
+
+def _extract_retry_delay(message: str) -> float | None:
+    """Read common Gemini RetryInfo/English retry hints from an error message."""
+
+    matches = re.findall(
+        r"(?:retry in|retryDelay[^0-9]*)([0-9]+(?:\.[0-9]+)?)\s*s", message
+    )
+    return max((float(value) for value in matches), default=0.0) or None
