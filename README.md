@@ -153,3 +153,59 @@ docker build -t request-classifier .
 docker run --rm --env-file .env -v "${PWD}:/app" request-classifier
 ```
 
+
+
+## Optional integrations
+
+### Async / batch processing
+
+По умолчанию запросы обрабатываются асинхронными батчами с ограничением
+MAX_CONCURRENCY=4. Gemini SDK остаётся синхронным, поэтому каждый вызов
+выполняется в worker thread; одновременно не создаётся неограниченное число
+API-запросов. Порядок результатов совпадает с порядком входного CSV.
+
+### Google Sheets
+
+Включается через:
+
+~~~dotenv
+GOOGLE_SHEETS_ENABLED=true
+GOOGLE_SERVICE_ACCOUNT_FILE=secrets/google-service-account.json
+GOOGLE_SHEET_ID=...
+GOOGLE_WORKSHEET_NAME=classification_results
+~~~
+
+Нужно создать Google Cloud service account, включить Google Sheets API,
+скачать JSON-ключ в secrets/ и открыть нужную таблицу для email service
+account с правами Editor. При каждом запуске worksheet очищается и заполняется
+актуальным batch целиком. raw_text не отправляется в таблицу.
+
+### Telegram digest
+
+Включается через:
+
+~~~dotenv
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+TELEGRAM_TIMEOUT_SECONDS=15
+~~~
+
+Бот должен иметь доступ к чату. Отправляется агрегированный digest с total,
+категориями, приоритетами, ошибками и ID запросов, требующих уточнения. Токен
+не логируется и не записывается в output.
+
+Обе внешние публикации выполняются после локальной записи output.json и
+report.md. Если Google Sheets или Telegram недоступны, локальные результаты
+сохраняются, а ошибка попадает в logging.
+
+### Docker
+
+Dockerfile уже включает новые optional integrations. Сервисный JSON-ключ не
+копируется в image; его нужно монтировать отдельно:
+
+~~~powershell
+docker build -t request-classifier .
+docker run --rm --env-file .env -v "$((Get-Location).Path)\secrets:/app/secrets:ro" -v "$((Get-Location).Path):/app" request-classifier
+~~~
+

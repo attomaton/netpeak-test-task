@@ -14,3 +14,6 @@ _docx_render/
 # Generated artifacts are intentionally kept when they are part of a sample run.
 # Add local-only files here instead of committing secrets.
 
+secrets/
+service-account*.json
+google-service-account*.json

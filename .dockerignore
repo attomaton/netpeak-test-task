@@ -6,3 +6,6 @@ __pycache__
 output.json
 report.md
 
+secrets
+service-account*.json
+google-service-account*.json
