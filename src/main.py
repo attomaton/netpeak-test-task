@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 from pathlib import Path
 
-from .classifier import RequestClassifier, classify_requests
+from .async_processing import classify_requests_async
+from .classifier import RequestClassifier
 from .config import Settings
+from .integrations import GoogleSheetsExporter, TelegramDigestSender
 from .io_utils import load_requests, write_output
 from .llm_client import GeminiLLMClient
 from .report import build_report
@@ -26,6 +29,37 @@ def configure_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+
+def publish_optional_integrations(results, settings: Settings, logger: logging.Logger) -> None:
+    """Best-effort external publishing after local artifacts are safely written."""
+
+    if settings.google_sheets_enabled:
+        assert settings.google_service_account_file is not None
+        try:
+            rows = GoogleSheetsExporter(
+                service_account_file=settings.google_service_account_file,
+                spreadsheet_id=settings.google_sheet_id,
+                worksheet_name=settings.google_worksheet_name,
+            ).export(results)
+            logger.info("Exported %s rows to Google Sheets", rows)
+        except Exception:
+            logger.exception(
+                "Google Sheets export failed; local output.json/report.md are preserved"
+            )
+
+    if settings.telegram_enabled:
+        try:
+            messages = TelegramDigestSender(
+                bot_token=settings.telegram_bot_token,
+                chat_id=settings.telegram_chat_id,
+                timeout_seconds=settings.telegram_timeout_seconds,
+            ).send(results)
+            logger.info("Sent Telegram digest in %s message(s)", messages)
+        except Exception:
+            logger.exception(
+                "Telegram digest failed; local output.json/report.md are preserved"
+            )
 
 
 def main() -> None:
@@ -47,7 +81,14 @@ def main() -> None:
         backoff_seconds=settings.retry_backoff_seconds,
         api_key=settings.api_key,
     )
-    results = classify_requests(requests, classifier)
+    results = asyncio.run(
+        classify_requests_async(
+            requests,
+            classifier,
+            max_concurrency=settings.max_concurrency,
+        )
+    )
+
     write_output(args.output, results)
     args.report.write_text(build_report(results), encoding="utf-8")
     logger.info(
@@ -56,8 +97,8 @@ def main() -> None:
         args.output,
         args.report,
     )
+    publish_optional_integrations(results, settings, logger)
 
 
 if __name__ == "__main__":
     main()
-
