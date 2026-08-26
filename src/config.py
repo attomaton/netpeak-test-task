@@ -25,7 +25,6 @@ class Settings:
     provider: str
     api_key: str
     model: str
-    temperature: float
     max_attempts: int
     retry_backoff_seconds: float
     max_concurrency: int
@@ -45,8 +44,7 @@ class Settings:
         load_dotenv(env_file)
         provider = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
         api_key = os.getenv("GEMINI_API_KEY", "").strip()
-        model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
-        temperature = float(os.getenv("LLM_TEMPERATURE", "0.1"))
+        model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
         max_attempts = int(os.getenv("MAX_ATTEMPTS", "3"))
         retry_backoff_seconds = float(os.getenv("RETRY_BACKOFF_SECONDS", "1.0"))
         max_concurrency = int(os.getenv("MAX_CONCURRENCY", "4"))
@@ -71,8 +69,6 @@ class Settings:
             raise ValueError("GEMINI_API_KEY is not set. Copy .env.example to .env and add it.")
         if not model:
             raise ValueError("GEMINI_MODEL cannot be empty.")
-        if not 0 <= temperature <= 1:
-            raise ValueError("LLM_TEMPERATURE must be between 0 and 1.")
         if max_attempts < 1 or max_attempts > 3:
             raise ValueError("MAX_ATTEMPTS must be between 1 and 3.")
         if retry_backoff_seconds < 0:
@@ -99,7 +95,6 @@ class Settings:
             provider=provider,
             api_key=api_key,
             model=model,
-            temperature=temperature,
             max_attempts=max_attempts,
             retry_backoff_seconds=retry_backoff_seconds,
             max_concurrency=max_concurrency,

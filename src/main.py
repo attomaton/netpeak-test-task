@@ -73,7 +73,6 @@ def main() -> None:
     llm_client = GeminiLLMClient(
         api_key=settings.api_key,
         model=settings.model,
-        temperature=settings.temperature,
     )
     classifier = RequestClassifier(
         llm_client=llm_client,

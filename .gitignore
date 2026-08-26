@@ -17,3 +17,8 @@ _docx_render/
 secrets/
 service-account*.json
 google-service-account*.json
+
+# Generated local artifacts
+output.json
+report.md
+docx_qa/

@@ -43,10 +43,10 @@ Copy-Item .env.example .env
 ```dotenv
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
-GEMINI_MODEL=gemini-2.5-flash
-LLM_TEMPERATURE=0.1
-MAX_ATTEMPTS=3
-RETRY_BACKOFF_SECONDS=1.0
+GEMINI_MODEL=gemini-3.5-flash-lite
+MAX_ATTEMPTS=2
+RETRY_BACKOFF_SECONDS=60
+MAX_CONCURRENCY=1
 ```
 
 Провайдер залишено окремою змінною для явної конфігурації, але поточна
@@ -93,7 +93,8 @@ python -m src.main --input input_requests.csv --output output.json --report repo
 
 - **Gemini.** У ТЗ прямо вказаний безкоштовний tier Gemini. Використовується
   офіційний `google-genai` SDK і `response_mime_type=application/json` разом із
-  Pydantic `response_schema`, щоб обмежити формат відповіді моделі.
+  явною Gemini-сумісною JSON-схемою, щоб обмежити формат відповіді моделі.
+  Pydantic використовується додатково для локальної перевірки.
 - **Pydantic.** Structured output не вважається достатньою гарантією: кожна
   відповідь додатково проходить локальну перевірку enum, типів, nullable-полів,
   списку дій та узгодженої пари `needs_clarification`/
@@ -104,8 +105,10 @@ python -m src.main --input input_requests.csv --output output.json --report repo
 - **`clarification_question`.** Це одне додаткове корисне поле для triage:
   замість загального «потрібно уточнення» результат одразу містить один
   найцінніший короткий question, який допоможе взяти запит у роботу.
-- **Retry.** За замовчуванням максимум 3 спроби з backoff `1s -> 2s`. Retry
-  застосовується і до API/timeout, і до невалідного JSON/Pydantic output, бо
+- **Retry.** Для API/timeout і невалідного JSON/Pydantic output використовується
+  bounded retry з backoff. Для безкоштовного tier у прикладі задано 2 спроби
+  та паузу 60 секунд, щоб пережити ліміт запитів за хвилину.
+  Retry застосовується і до API/timeout, і до невалідного JSON/Pydantic output, бо
   тимчасова помилка або нестабільна відповідь може зникнути. Після ліміту
   конкретний запит отримує явний `error`, а batch продовжується.
 
@@ -113,11 +116,11 @@ python -m src.main --input input_requests.csv --output output.json --report repo
 
 | Проблема | Зараз | Що покращити в production |
 |---|---|---|
-| Nondeterminism LLM | Низька температура, фіксований prompt і enum/schema | Версіонувати prompt, додати eval-набір і regression checks |
+| Nondeterminism LLM | Фіксований prompt і enum/schema; для Gemini 3.x `temperature` не передається | Версіонувати prompt, додати eval-набір і regression checks |
 | Помилкова класифікація | Визначення категорій у prompt, локальна schema validation | Human-in-the-loop для low-confidence випадків і метрики по категоріях |
 | Invalid JSON/типи/enum | Gemini JSON schema плюс Pydantic і bounded retry | Окремий retry policy для permanent validation errors та dead-letter queue |
 | API/network failures | До 3 спроб, exponential backoff, помилка лише для одного `id` | Circuit breaker, provider monitoring, черга та повторна обробка |
-| Rate limits | Обмежені retries, без паралельного burst | Async/batching із rate limiter та backpressure |
+| Rate limits | `MAX_CONCURRENCY` обмежує паралельність, retry/backoff обробляє тимчасовий 429; точного quota-aware rate limiter немає | Додати rate limiter та backpressure |
 | Великий CSV | Лінійна обробка з малою пам'яттю | Batch API, async workers, checkpoint/resume та caching |
 | Token/API cost | Короткий prompt і одна LLM-операція на рядок | Token budget, дедуплікація, cache, batch pricing |
 | Неоднозначний текст | `needs_clarification` і конкретне питання | Еталонний датасет, review queue і feedback loop |
@@ -125,19 +128,20 @@ python -m src.main --input input_requests.csv --output output.json --report repo
 
 ## Що зробив би далі
 
-1. Додати async/batch processing з обмеженням concurrency.
+1. Додати quota-aware rate limiter та checkpoint/resume для великих batch.
 2. Зібрати невеликий labeled eval dataset і рахувати precision/recall/F1 для
    category, priority та needs_clarification.
 3. Додати cache за hash нормалізованого `raw_text`.
 4. Додати human review для сумнівних або high-priority запитів.
-5. Підключити monitoring, Google Sheets/Telegram digest і deployment secrets.
+5. Додати monitoring, provider fallback і CI-перевірку Docker-образу.
 
 ## Тести
 
 Реальний LLM API у тестах не викликається:
 
 ```powershell
-pytest -q
+python -m pytest -q
+python -m compileall -q src
 ```
 
 Перевіряються Pydantic validation, invalid JSON/retry, результат після
@@ -152,6 +156,12 @@ pytest -q
 docker build -t request-classifier .
 docker run --rm --env-file .env -v "${PWD}:/app" request-classifier
 ```
+
+## Submission
+
+У репозиторій не додаються `.env`, `secrets/`, `.venv/`, `__pycache__/` та
+локальні generated outputs. Перевіряючий може створити власний `.env` на основі
+`.env.example` і запустити `python -m src.main`.
 
 
 
@@ -175,7 +185,7 @@ GOOGLE_SHEET_ID=...
 GOOGLE_WORKSHEET_NAME=classification_results
 ~~~
 
-Нужно создать Google Cloud service account, включить Google Sheets API,
+Нужно создать Google Cloud service account, включить Google Sheets API и Drive API,
 скачать JSON-ключ в secrets/ и открыть нужную таблицу для email service
 account с правами Editor. При каждом запуске worksheet очищается и заполняется
 актуальным batch целиком. raw_text не отправляется в таблицу.
@@ -208,4 +218,10 @@ Dockerfile уже включает новые optional integrations. Серви�
 docker build -t request-classifier .
 docker run --rm --env-file .env -v "$((Get-Location).Path)\secrets:/app/secrets:ro" -v "$((Get-Location).Path):/app" request-classifier
 ~~~
+
+## Submission
+
+У репозиторій не додаються `.env`, `secrets/`, `.venv/`, `__pycache__/` та
+локальні generated outputs. Перевіряючий може створити власний `.env` на основі
+`.env.example` і запустити `python -m src.main`.
 

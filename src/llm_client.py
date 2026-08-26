@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from .models import ClassificationResult
 from .prompt import SYSTEM_PROMPT, build_user_prompt
 
 
 class GeminiLLMClient:
     """Call Gemini using the official google-genai SDK."""
 
-    def __init__(self, api_key: str, model: str, temperature: float = 0.1) -> None:
+    def __init__(self, api_key: str, model: str) -> None:
         try:
             from google import genai
             from google.genai import types
@@ -22,7 +21,6 @@ class GeminiLLMClient:
 
         self._types = types
         self.model = model
-        self.temperature = temperature
         self.client = genai.Client(api_key=api_key)
 
     def classify(self, raw_text: str) -> Any:
@@ -33,9 +31,48 @@ class GeminiLLMClient:
             contents=build_user_prompt(raw_text),
             config=self._types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
-                temperature=self.temperature,
                 response_mime_type="application/json",
-                response_schema=ClassificationResult,
+                response_schema={
+                    "type": "object",
+                    "properties": {
+                        "category": {
+                            "type": "string",
+                            "enum": [
+                                "автоматизація",
+                                "інтеграція",
+                                "звіт/аналітика",
+                                "баг/підтримка",
+                                "питання/консультація",
+                                "поза скоупом",
+                            ],
+                        },
+                        "target_department": {
+                            "type": "string",
+                            "nullable": True,
+                        },
+                        "priority": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                        },
+                        "short_summary": {"type": "string"},
+                        "requested_actions": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "needs_clarification": {"type": "boolean"},
+                        "clarification_question": {
+                            "type": "string",
+                            "nullable": True,
+                        },
+                    },
+                    "required": [
+                        "category",
+                        "priority",
+                        "short_summary",
+                        "requested_actions",
+                        "needs_clarification",
+                    ],
+                },
             ),
         )
 
